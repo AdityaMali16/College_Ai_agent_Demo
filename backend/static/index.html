@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>College AI Agent - Demo</title>
+<style>
+  :root { --navy:#1F3864; --accent:#2E74B5; --bg:#F4F6F9; --bubble-user:#2E74B5; --bubble-bot:#E8EDF3; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: var(--bg); margin:0; display:flex; justify-content:center; }
+  .app { width: 100%; max-width: 640px; height: 100vh; display:flex; flex-direction:column; background:#fff; box-shadow: 0 0 24px rgba(0,0,0,0.06); }
+  header { background: var(--navy); color:#fff; padding: 18px 20px; }
+  header h1 { margin:0; font-size: 18px; }
+  header p { margin: 4px 0 0; font-size: 12px; opacity: 0.8; }
+  #login { padding: 24px; display:flex; flex-direction:column; gap: 10px; }
+  #login input { padding: 10px 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px; }
+  #login button { padding: 10px 12px; background: var(--accent); color:#fff; border:none; border-radius: 8px; cursor:pointer; font-size: 14px; }
+  #login .hint { font-size: 12px; color: #777; }
+  #chat-area { flex:1; overflow-y:auto; padding: 16px; display:none; flex-direction:column; gap: 10px; }
+  .msg { max-width: 78%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height:1.45; white-space: pre-wrap; }
+  .msg.user { align-self: flex-end; background: var(--bubble-user); color:#fff; border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: var(--bubble-bot); color:#222; border-bottom-left-radius: 4px; }
+  .meta { font-size: 10px; color:#999; margin-top: 3px; }
+  #input-area { display:none; padding: 12px; border-top: 1px solid #eee; gap: 8px; }
+  #input-area input { flex:1; padding: 10px 12px; border: 1px solid #ccc; border-radius: 20px; font-size: 14px; }
+  #input-area button { padding: 10px 18px; background: var(--navy); color:#fff; border:none; border-radius: 20px; cursor:pointer; }
+  #suggestions { display:flex; flex-wrap:wrap; gap:6px; padding: 0 12px 10px; display:none; }
+  .chip { background: #eef2f8; border: 1px solid #d7e0ec; color: var(--navy); padding: 6px 10px; border-radius: 14px; font-size: 12px; cursor:pointer; }
+  #status { font-size: 11px; color:#888; padding: 4px 16px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>College AI Agent — Phase 1 Demo</h1>
+    <p id="status">checking backend...</p>
+  </header>
+
+  <div id="login">
+    <p class="hint">Demo student IDs: CS101, CS102, EC101, ME101, CS103, IT101 — password for all: <b>demo123</b></p>
+    <input id="student_id" placeholder="Student ID (e.g. CS101)" value="CS101">
+    <input id="password" type="password" placeholder="Password" value="demo123">
+    <button onclick="login()">Login</button>
+    <p class="hint" id="login-error" style="color:#c0392b;"></p>
+  </div>
+
+  <div id="chat-area"></div>
+  <div id="suggestions">
+    <div class="chip" onclick="ask('Meri attendance kitni hai?')">Meri attendance kitni hai?</div>
+    <div class="chip" onclick="ask('Kal ki classes kya hai?')">Kal ki classes kya hai?</div>
+    <div class="chip" onclick="ask('Agar main 5 classes miss karu Data Structures me to kya hoga?')">What-if: miss 5 classes</div>
+    <div class="chip" onclick="ask('Exam schedule batao')">Exam schedule batao</div>
+    <div class="chip" onclick="ask('Fee status kya hai?')">Fee status kya hai?</div>
+  </div>
+  <div id="input-area">
+    <input id="msg-input" placeholder="Type your question..." onkeydown="if(event.key==='Enter') send()">
+    <button onclick="send()">Send</button>
+  </div>
+</div>
+
+<script>
+let token = null;
+let studentName = null;
+
+async function checkHealth() {
+  try {
+    const r = await fetch('/api/health');
+    const d = await r.json();
+    document.getElementById('status').innerText =
+      d.llm_mode === 'live' ? 'Backend connected — LLM mode: LIVE' : 'Backend connected — LLM mode: DEMO (rule-based, no API key set)';
+  } catch (e) {
+    document.getElementById('status').innerText = 'Backend not reachable. Is uvicorn running?';
+  }
+}
+checkHealth();
+
+async function login() {
+  const student_id = document.getElementById('student_id').value.trim();
+  const password = document.getElementById('password').value;
+  const errEl = document.getElementById('login-error');
+  errEl.innerText = '';
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({student_id, password})
+    });
+    if (!r.ok) {
+      const d = await r.json();
+      errEl.innerText = d.detail || 'Login failed';
+      return;
+    }
+    const d = await r.json();
+    token = d.token;
+    studentName = d.name;
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('chat-area').style.display = 'flex';
+    document.getElementById('input-area').style.display = 'flex';
+    document.getElementById('suggestions').style.display = 'flex';
+    addMsg('bot', `Hi ${studentName}! Ask me about your attendance, timetable, exams, or fees.`);
+  } catch (e) {
+    errEl.innerText = 'Could not reach backend.';
+  }
+}
+
+function addMsg(role, text, meta) {
+  const area = document.getElementById('chat-area');
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.innerText = text;
+  if (meta) {
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.innerText = meta;
+    div.appendChild(m);
+  }
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+}
+
+function ask(text) {
+  document.getElementById('msg-input').value = text;
+  send();
+}
+
+async function send() {
+  const input = document.getElementById('msg-input');
+  const text = input.value.trim();
+  if (!text) return;
+  addMsg('user', text);
+  input.value = '';
+
+  try {
+    const r = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token},
+      body: JSON.stringify({message: text})
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      addMsg('bot', 'Error: ' + (d.detail || 'something went wrong'));
+      return;
+    }
+    addMsg('bot', d.response, `tool: ${d.tool_used || 'none'} · mode: ${d.mode}`);
+  } catch (e) {
+    addMsg('bot', 'Could not reach backend.');
+  }
+}
+</script>
+</body>
+</html>
